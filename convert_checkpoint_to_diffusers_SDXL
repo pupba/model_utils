@@ -1,0 +1,75 @@
+import torch
+from diffusers import StableDiffusionXLPipeline, AutoencoderKL
+from pathlib import Path
+from huggingface_hub import login
+
+login(token=<Your Huggingface Token>)
+
+
+def convert_ckpt_to_diffusers(
+    input_ckpt_path: str, output_base_dir: str, vae_folder: str = None
+):
+    """
+    로컬 .ckpt/.safetensors 파일을 읽어
+    - FP32 버전 (safe_serialization=True)
+    - FP16 버전 (to(torch.float16), safe_serialization=True)
+    로컬에 저장합니다.
+    """
+    input_path = Path(input_ckpt_path)
+    if not input_path.exists():
+        raise FileNotFoundError(f"체크포인트 파일이 없습니다: {input_ckpt_path}")
+
+    base_dir = Path(output_base_dir)
+    # 하위 폴더 생성
+    fp32_dir = base_dir / "diffusers_fp32"
+    fp16_dir = base_dir / "diffusers_fp16"
+    fp32_dir.mkdir(parents=True, exist_ok=True)
+    fp16_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1) FP32 버전 로드 & 저장
+    pipeline = StableDiffusionXLPipeline.from_single_file(str(input_path))
+
+    if vae_folder:
+        vae_folder = Path(vae_folder)
+        if not vae_folder.is_dir():
+            raise FileNotFoundError(f"VAE 폴더가 없습니다: {vae_folder}")
+        vae = AutoencoderKL.from_pretrained(
+            str(vae_folder), torch_dtype=torch.float32, local_files_only=True
+        )
+        pipeline.vae = vae
+
+    pipeline.save_pretrained(str(fp32_dir), safe_serialization=True)
+    print(f"✅ FP32 모델 저장 완료: {fp32_dir}")
+
+    # 2) FP16으로 변환 & 저장
+    pipeline.to(torch.float16)
+    pipeline.save_pretrained(str(fp16_dir), safe_serialization=True)
+    print(f"✅ FP16 모델 저장 완료: {fp16_dir}")
+
+
+if __name__ == "__main__":
+    # 예시 사용법
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="로컬 체크포인트 → Diffusers safetensors 변환"
+    )
+    parser.add_argument(
+        "--input", "-i", required=True, help="로컬 .ckpt/.safetensors 파일 경로"
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        required=True,
+        help="출력 디렉터리 (하위에 `diffusers_fp32`, `diffusers_fp16`이 생성됩니다)",
+    )
+    parser.add_argument(
+        "--vae",
+        "-v",
+        required=False,
+        default=None,
+        help="로컬 VAE 폴더 경로 (config.json/.yaml + .safetensors)",
+    )
+    args = parser.parse_args()
+
+    convert_ckpt_to_diffusers(args.input, args.output)
