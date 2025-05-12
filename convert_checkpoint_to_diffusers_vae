@@ -1,0 +1,60 @@
+"""
+You must have '.yaml' and 'checkpoints' in the same folder.
+"""
+from safetensors.torch import load_file as safe_load
+def convert_yaml_safetensors_to_diffusers(
+    vae_yaml: str, vae_safetensors: str, output_dir: str
+):
+    import yaml
+    from diffusers import AutoencoderKL
+    import torch
+    from pathlib import Path
+
+    # ① YAML 설정 읽기
+    orig = yaml.safe_load(open(vae_yaml, "r"))
+    params = orig["model"]["params"]["first_stage_config"]["params"]
+    dd = params["ddconfig"]
+    embed_dim = params["embed_dim"]
+
+    # ② Diffusers VAE config 생성 (위 예제와 동일)
+    block_out_channels = [dd["ch"] * m for m in dd["ch_mult"]]
+    down_block_types = ["DownEncoderBlock2D"] * len(block_out_channels)
+    up_block_types = ["UpDecoderBlock2D"] * len(block_out_channels)
+    config = {
+        "sample_size": dd["resolution"],
+        "in_channels": dd["in_channels"],
+        "out_channels": dd["out_ch"],
+        "down_block_types": tuple(down_block_types),
+        "up_block_types": tuple(up_block_types),
+        "block_out_channels": tuple(block_out_channels),
+        "layers_per_block": dd["num_res_blocks"],
+        "latent_channels": embed_dim,
+    }
+
+    # ③ AutoencoderKL 객체 생성
+    vae = AutoencoderKL(**config)
+
+    # ④ safetensors 로드 → state_dict
+    #     torch.load 대신 safetensors.torch.load_file 사용
+    state_dict = safe_load(vae_safetensors, device="cpu")
+    vae.load_state_dict(state_dict, strict=False)
+
+    # ⑤ Diffusers 포맷으로 저장
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    vae.save_pretrained(str(out), safe_serialization=True)
+    print(f"✅ Diffusers VAE 폴더 생성 완료: {out}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="YAML + safetensors → Diffusers VAE 폴더 변환"
+    )
+    parser.add_argument("-y", "--yaml", required=True, help="v1-inference.yaml 경로")
+    parser.add_argument("-w", "--weights", required=True, help=".safetensors 경로")
+    parser.add_argument("-o", "--out", required=True, help="출력 디렉터리")
+    args = parser.parse_args()
+
+    convert_yaml_safetensors_to_diffusers(args.yaml, args.weights, args.out)
